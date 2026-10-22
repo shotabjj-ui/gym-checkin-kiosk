@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>チェックイン端末</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #0f172a;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      color: #f8fafc;
+    }
+
+    /* ---- カメラ画面 ---- */
+    #scanScreen {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    #video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1); /* 内カメの鏡写しを自然な向きに補正(表示のみ) */
+    }
+    #overlay {
+      position: relative;
+      z-index: 2;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 32px 16px;
+      background: linear-gradient(to bottom, rgba(15,23,42,0.75) 0%, rgba(15,23,42,0) 22%, rgba(15,23,42,0) 70%, rgba(15,23,42,0.85) 100%);
+    }
+    .header {
+      text-align: center;
+    }
+    .header h1 {
+      font-size: 22px;
+      margin: 0 0 4px;
+      font-weight: 700;
+    }
+    .header p {
+      margin: 0;
+      font-size: 14px;
+      color: #cbd5e1;
+    }
+    .clock {
+      font-size: 15px;
+      color: #94a3b8;
+      margin-top: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .frame {
+      width: min(70vw, 320px);
+      height: min(70vw, 320px);
+      border: 4px solid rgba(248,250,252,0.85);
+      border-radius: 28px;
+      box-shadow: 0 0 0 2000px rgba(15,23,42,0.35);
+    }
+    .hint {
+      text-align: center;
+      font-size: 16px;
+      color: #e2e8f0;
+      padding: 10px 20px;
+      background: rgba(15,23,42,0.55);
+      border-radius: 999px;
+    }
+    #camError {
+      position: relative;
+      z-index: 3;
+      display: none;
+      text-align: center;
+      padding: 24px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: #fecaca;
+    }
+
+    /* ---- 起動前の案内画面(iOS Safariはタップ操作がないとカメラ許可を出せないため) ---- */
+    #startScreen {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      text-align: center;
+      padding: 32px;
+      background: #0f172a;
+    }
+    #startScreen.hide { display: none; }
+    #startScreen .startIcon { font-size: 64px; }
+    #startScreen h1 { font-size: 22px; margin: 0; }
+    #startScreen p { font-size: 15px; color: #94a3b8; margin: 0; line-height: 1.6; max-width: 320px; }
+    #startButton {
+      font-size: 18px;
+      font-weight: 700;
+      color: #0f172a;
+      background: #22c55e;
+      border: none;
+      border-radius: 999px;
+      padding: 18px 40px;
+      -webkit-appearance: none;
+    }
+    #startButton:active { opacity: 0.85; }
+    #startScreen input {
+      font-size: 14px;
+      width: min(85vw, 360px);
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #f8fafc;
+    }
+    #startScreen .setupNote {
+      font-size: 12px;
+      color: #64748b;
+      max-width: 320px;
+    }
+    #startScreen .setupError {
+      font-size: 13px;
+      color: #f87171;
+      min-height: 16px;
+    }
+
+    /* ---- 結果画面 ---- */
+    #resultScreen {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+    }
+    #resultScreen.success { background: #052e1a; }
+    #resultScreen.error { background: #450a0a; }
+    #resultScreen.show { display: flex; }
+    .card { max-width: 440px; width: 100%; }
+    .photo {
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      object-fit: cover;
+      margin: 0 auto 24px;
+      border: 5px solid #22c55e;
+      display: block;
+      background: #334155;
+    }
+    .icon { font-size: 84px; margin-bottom: 16px; line-height: 1; }
+    .success .icon { color: #22c55e; }
+    .error .icon { color: #f87171; }
+    .card h2 { font-size: 30px; margin: 0 0 8px; }
+    .card p.name { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
+    .card p.time { font-size: 15px; color: #94a3b8; margin: 0 0 8px; }
+    .card p.message { font-size: 18px; line-height: 1.6; color: #e2e8f0; margin: 0; }
+
+    .countdown {
+      margin-top: 28px;
+      font-size: 13px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 起動前の案内画面(設置時に1回だけタップしてもらう) -->
+  <div id="startScreen">
+    <div class="startIcon">📷</div>
+    <h1>チェックイン端末を起動します</h1>
+    <p>画面をタップするとカメラが起動します。以降は会員証のQRコードをかざすだけで自動チェックインが続きます。</p>
+    <input id="apiUrlInput" type="url" placeholder="GASウェブアプリのURL(.../exec)" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <p class="setupNote">スプレッドシートの「ジム管理」メニューの「キオスク画面のURLを表示」で出るURLから、末尾の「?mode=kiosk」を除いたものを貼り付けてください。設置時に1回だけ入力すれば、この端末では次回から自動で記憶されます。</p>
+    <div class="setupError" id="setupError"></div>
+    <button id="startButton">タップしてカメラを起動</button>
+  </div>
+
+  <!-- カメラ待機画面 -->
+  <div id="scanScreen">
+    <video id="video" muted playsinline autoplay></video>
+    <div id="overlay">
+      <div class="header">
+        <h1>会員証のQRコードをかざしてください</h1>
+        <p>画面中央の枠にQRコードを合わせると自動でチェックインします</p>
+        <div class="clock" id="clock"></div>
+      </div>
+      <div class="frame"></div>
+      <div class="hint" id="hint">読み取り待機中…</div>
+    </div>
+    <div id="camError">
+      カメラを起動できませんでした。<br>
+      このページをタブレットの標準ブラウザで開き、カメラの使用を許可してください。<br>
+      画面を再読み込みすると再試行します。
+    </div>
+  </div>
+
+  <!-- チェックイン結果画面(数秒で自動的に読み取り待機に戻る) -->
+  <div id="resultScreen">
+    <div class="card">
+      <div class="icon" id="resultIcon"></div>
+      <img class="photo" id="resultPhoto" style="display:none;" alt="">
+      <p class="name" id="resultName" style="display:none;"></p>
+      <h2 id="resultTitle"></h2>
+      <p class="time" id="resultTime" style="display:none;"></p>
+      <p class="message" id="resultMessage" style="display:none;"></p>
+      <div class="countdown" id="countdown"></div>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const hint = document.getElementById('hint');
+    const camError = document.getElementById('camError');
+    const scanScreen = document.getElementById('scanScreen');
+    const resultScreen = document.getElementById('resultScreen');
+    const clockEl = document.getElementById('clock');
+    const startScreen = document.getElementById('startScreen');
+    const startButton = document.getElementById('startButton');
+    const apiUrlInput = document.getElementById('apiUrlInput');
+    const setupError = document.getElementById('setupError');
+
+    // GASウェブアプリのベースURL( .../exec )。この端末のブラウザに保存しておく。
+    let GAS_BASE_URL = '';
+    try {
+      GAS_BASE_URL = localStorage.getItem('gymCheckinGasUrl') || '';
+    } catch (e) {
+      // localStorageが使えない場合は毎回入力してもらう
+    }
+    if (GAS_BASE_URL) {
+      apiUrlInput.value = GAS_BASE_URL;
+    }
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    let scanning = true;       // 現在カメラから読み取ってよいか
+    let lastMemberId = null;   // 直前に処理した会員番号(連続読み取り防止用)
+    let cooldownTimer = null;
+
+    // 時計表示
+    function tickClock() {
+      const now = new Date();
+      clockEl.textContent = now.toLocaleString('ja-JP', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    }
+    setInterval(tickClock, 1000);
+    tickClock();
+
+    // カメラ起動(内カメ/フロントカメラ優先・iPhoneを据え置いて使う想定)
+    // iOS Safariは、画面タップなどのユーザー操作がきっかけでないとカメラの許可を
+    // 出さないため、ページ読み込み時の自動起動はせず、ボタンのタップから呼び出す。
+    async function startCamera() {
+      const url = apiUrlInput.value.trim();
+      if (!url || url.indexOf('script.google.com') === -1) {
+        setupError.textContent = 'GASウェブアプリのURL(.../exec)を入力してください。';
+        return;
+      }
+      GAS_BASE_URL = url.replace(/\/?\?.*$/, '').replace(/\/$/, '');
+      try {
+        localStorage.setItem('gymCheckinGasUrl', GAS_BASE_URL);
+      } catch (e) {
+        // 保存できなくても動作は継続する
+      }
+      setupError.textContent = '';
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        startScreen.classList.add('hide');
+        requestAnimationFrame(scanLoop);
+      } catch (err) {
+        startScreen.classList.add('hide');
+        camError.style.display = 'block';
+        scanScreen.style.background = '#0f172a';
+        video.style.display = 'none';
+      }
+    }
+
+    // QRコードを継続的にスキャン
+    function scanLoop() {
+      if (scanning && video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'dontInvert'
+        });
+
+        if (code && code.data) {
+          handleScanned(code.data);
+        }
+      }
+      requestAnimationFrame(scanLoop);
+    }
+
+    // QRの中身から会員番号を取り出す
+    // (チェックインURル全体が入っていても、番号そのものだけが入っていても対応)
+    function extractMemberId(text) {
+      try {
+        const url = new URL(text);
+        const fromQuery = url.searchParams.get('member');
+        if (fromQuery) return fromQuery;
+      } catch (e) {
+        // URLではない場合はそのままテキストを会員番号として扱う
+      }
+      return text.trim();
+    }
+
+    function handleScanned(rawText) {
+      const memberId = extractMemberId(rawText);
+      if (!memberId) return;
+
+      // 同じ会員が連続で何度も読み取られるのを防ぐ
+      if (memberId === lastMemberId) return;
+
+      scanning = false;
+      lastMemberId = memberId;
+      hint.textContent = '確認中…';
+
+      const apiUrl = GAS_BASE_URL + '?api=checkin&member=' + encodeURIComponent(memberId);
+
+      fetch(apiUrl)
+        .then(function (res) { return res.json(); })
+        .then(showResult)
+        .catch(function () {
+          showResult({
+            status: 'error',
+            message: '通信エラーが発生しました。もう一度お試しください。'
+          });
+        });
+    }
+
+    function showResult(result) {
+      resultScreen.className = result.status === 'success' ? 'success show' : 'error show';
+
+      document.getElementById('resultIcon').textContent = result.status === 'success' ? '✓' : '!';
+      document.getElementById('resultTitle').textContent =
+        result.status === 'success' ? 'チェックイン完了' : 'チェックインできません';
+
+      const photoEl = document.getElementById('resultPhoto');
+      const nameEl = document.getElementById('resultName');
+      const timeEl = document.getElementById('resultTime');
+      const msgEl = document.getElementById('resultMessage');
+
+      if (result.status === 'success') {
+        nameEl.style.display = 'block';
+        nameEl.textContent = result.name + ' さん';
+        timeEl.style.display = 'block';
+        timeEl.textContent = result.time;
+        msgEl.style.display = 'none';
+        if (result.photoUrl) {
+          photoEl.style.display = 'block';
+          photoEl.src = result.photoUrl;
+        } else {
+          photoEl.style.display = 'none';
+        }
+      } else {
+        nameEl.style.display = 'none';
+        timeEl.style.display = 'none';
+        photoEl.style.display = 'none';
+        msgEl.style.display = 'block';
+        msgEl.textContent = result.message || 'もう一度お試しください。';
+      }
+
+      // 数秒後に自動で読み取り待機画面へ戻る
+      let remain = result.status === 'success' ? 4 : 5;
+      const countdownEl = document.getElementById('countdown');
+      countdownEl.textContent = remain + '秒後に次の読み取りへ戻ります';
+
+      clearInterval(cooldownTimer);
+      cooldownTimer = setInterval(function () {
+        remain -= 1;
+        if (remain <= 0) {
+          clearInterval(cooldownTimer);
+          resetToScan();
+        } else {
+          countdownEl.textContent = remain + '秒後に次の読み取りへ戻ります';
+        }
+      }, 1000);
+    }
+
+    function resetToScan() {
+      resultScreen.className = '';
+      hint.textContent = '読み取り待機中…';
+      lastMemberId = null;
+      scanning = true;
+    }
+
+    startButton.addEventListener('click', startCamera);
+  </script>
+</body>
+</html>
